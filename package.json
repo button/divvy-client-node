@@ -1,0 +1,28 @@
+{
+  "name": "@button/divvy-client",
+  "version": "1.0.1",
+  "description": "NodeJS client to the Divvy quota service.",
+  "main": "index.js",
+  "scripts": {
+    "test": "mocha --recursive tests/"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/button/divvy-client-node.git"
+  },
+  "author": "mike wakerly <mikey@usebutton.com>",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/button/divvy-client-node/issues"
+  },
+  "homepage": "https://github.com/button/divvy-client-node#readme",
+  "dependencies": {
+    "carrier": "^0.3.0"
+  },
+  "devDependencies": {
+    "bluebird": "^3.3.5",
+    "mocha": "^2.4.5",
+    "mocha-jshint": "^2.3.1",
+    "sinon": "^1.17.3"
+  }
+}
