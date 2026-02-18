@@ -1,6 +1,12 @@
+// @ts-check
 'use strict';
 
+/**
+ * Base error class for all Divvy client errors.
+ * @extends Error
+ */
 class DivvyClientError extends Error {
+  /** @param {string} message the error message */
   constructor(message) {
     super(message);
     this.name = this.constructor.name;
@@ -13,19 +19,31 @@ class DivvyClientError extends Error {
   }
 }
 
-/** Message timed out. */
+/**
+ * Message timed out.
+ * @extends DivvyClientError
+ */
 class TimeoutError extends DivvyClientError {
 }
 
-/** Tried to send message while disconnected. */
+/**
+ * Tried to send message while disconnected.
+ * @extends DivvyClientError
+ */
 class DisconnectedError extends DivvyClientError {
 }
 
-/** Too many requests in flight. */
+/**
+ * Too many requests in flight.
+ * @extends DivvyClientError
+ */
 class BacklogError extends DivvyClientError {
 }
 
-/** Got a bad response from the server. */
+/**
+ * Got a bad response from the server.
+ * @extends DivvyClientError
+ */
 class BadResponseError extends DivvyClientError {
 }
 
