@@ -1,3 +1,4 @@
+// @ts-check
 'use strict';
 
 const carrier = require('carrier');
@@ -6,9 +7,37 @@ const Errors = require('./errors');
 const util = require('./util');
 const EventEmitter = require('events').EventEmitter;
 
+/** @typedef {import('./errors').BacklogError} BacklogError */
+/** @typedef {import('./errors').TimeoutError} TimeoutError */
+/** @typedef {import('./errors').DisconnectedError} DisconnectedError */
+/** @typedef {import('./errors').BadResponseError} BadResponseError */
+
+/**
+ * @template T
+ * @param {T|undefined} val
+ * @param {T} defaultVal
+ * @returns {T}
+ */
 function defaultIfUndefined(val, defaultVal) {
   return val !== undefined ? val : defaultVal;
 }
+
+/** @typedef {import('./types').ClientOptions} ClientOptions */
+/** @typedef {import('./types').HitResponse} HitResponse */
+/** @typedef {import('./types').Operation} Operation */
+
+/**
+ * @typedef {Object} PendingRequest
+ * @property {string} message the raw protocol message
+ * @property {boolean} isRejectedOrResolved whether the request
+ *     has already been settled
+ * @property {Promise<HitResponse>} [promise] the promise for
+ *     this request
+ * @property {function(HitResponse): void} [resolve] resolves
+ *     the promise
+ * @property {function(Error): void} [reject] rejects the promise
+ * @property {ReturnType<typeof setTimeout>|null} [timeout] pending timeout handle
+ */
 
 /**
  * Basic Divvy protocol client.
@@ -20,67 +49,87 @@ function defaultIfUndefined(val, defaultVal) {
  * If a command is called while the client is disconnected, the command
  * will be enqueued and the client will be connected.
  *
- * Timeouts:
+ * @extends EventEmitter
+ * @fires Client#connected
+ * @fires Client#disconnected
+ * @fires Client#error
  */
 class Client extends EventEmitter {
 
   /**
-   * Constructor.
-   *
-   * @param  {string} host    server hostname
-   * @param  {number} port    server port number
-   * @param  {boolean} options.autoReconnect  whether to automatically reconnect when the
-   *     server connection is unexpectedly closed (default true)
-   * @param  {number} options.defaultCommandTimeoutMillis  default timeout for commands, or
-   *     `null` to not use a timouer (default 1000)
-   * @param  {number} options.maxPendingRequests  maximum number of outgoing requests
-   *     that are allowed to be in flight at any one time. Requests made over this
-   *     limit will be dropped. (default 100)
-   * @param  {number} options.maxReconnectAttempts  when `options.autoReconnect` is true,
-   *     maximum number of consecutive `connect()` attempts the client will automatically
-   *     make before giving up
-   * @param  {boolean} options.throttleConnect  whether to throttle calls to `connect()`
-   *     such that they will not be attempted more than once every
-   *     `options.throttleConnectTimeoutMillis` (default true)
-   * @param  {boolean} options.throttleConnectTimeoutMillis  when `throttleConnect` is
-   *     `true`, enforce a delay of this many milliseconds before connecting again.
+   * Fired when the TCP connection is established.
+   * @event Client#connected
+   */
+
+  /**
+   * Fired when the TCP connection is closed (whether expected or not).
+   * @event Client#disconnected
+   */
+
+  /**
+   * Fired when a socket error occurs.
+   * @event Client#error
+   * @type {Error}
+   */
+
+  /**
+   * @param {string} host server hostname
+   * @param {number} port server port number
+   * @param {ClientOptions} [options] client options
    */
   constructor(host, port, options) {
     super();
 
     options = options || {};
 
+    /** @type {string} */
     this.host = host || 'localhost';
+    /** @type {number} */
     this.port = port || 8321;
 
+    /** @type {net.Socket|null} */
     this.clientSocket = null;
+    /** @type {boolean} */
     this.connected = false;
 
-    // Requests that have not yet been written to the socket. Typically
-    // empty unless disconnected.
+    /** @type {PendingRequest[]} Requests not yet written to the socket. */
     this.requestQueue = [];
 
-    // Requests that have been written to the socket and are awaiting a
-    // response.
+    /** @type {PendingRequest[]} Requests awaiting a response. */
     this.responseQueue = [];
 
+    /** @type {boolean} */
     this.autoReconnect = defaultIfUndefined(options.autoReconnect, true);
+    /** @type {number} */
     this.maxReconnectAttempts = defaultIfUndefined(options.maxReconnectAttempts, 5);
+    /** @type {boolean} */
     this.throttleConnect = defaultIfUndefined(options.throttleConnect, true);
+    /** @type {number} */
     this.throttleConnectTimeoutMillis = defaultIfUndefined(
       options.throttleConnectTimeoutMillis, 1000);
+    /** @type {number} */
     this.maxPendingRequests = defaultIfUndefined(options.maxPendingRequests, 100);
+    /** @type {number|null} */
     this.defaultCommandTimeoutMillis = defaultIfUndefined(
       options.defaultCommandTimeoutMillis, 1000);
 
-    // Timeout handle, set when the client is unexpectedly closed.
+    /**
+     * @type {ReturnType<typeof setTimeout>|null}
+     * Timeout handle, set when the client is unexpectedly closed
+     */
     this.connectTimeoutHandle = null;
+    /** @type {Date|null} */
     this.lastDisconnectDate = null;
+    /** @type {number} */
     this.reconnectAttempts = 0;
+    /** @type {() => void} */
     this.onDisconnectedListener = this._onUnexpectedDisconnect.bind(this);
   }
 
-  /** Schedules connection to the server; no-op if already connected. */
+  /**
+   * Schedules connection to the server; no-op if already connected.
+   * @returns {void}
+   */
   connect() {
     if (this.clientSocket || this.connectTimeoutHandle) {
       // Already connected or connecting. Ignore.
@@ -94,6 +143,7 @@ class Client extends EventEmitter {
 
     var delay = 0;
     if (this.lastDisconnectDate) {
+      // @ts-ignore — Date arithmetic is valid in JS
       let age = Math.max(0, new Date() - this.lastDisconnectDate);
       delay = Math.max(0, this.throttleConnectTimeoutMillis - age);
       this.lastDisconnectDate = null;
@@ -106,7 +156,10 @@ class Client extends EventEmitter {
     }
   }
 
-  /** Manually close the connection. This will not trigger a reconnect. */
+  /**
+   * Manually close the connection. This will not trigger a reconnect.
+   * @returns {void}
+   */
   close() {
     if (this.connectTimeoutHandle) {
       clearTimeout(this.connectTimeoutHandle);
@@ -124,14 +177,18 @@ class Client extends EventEmitter {
 
   /**
    * Perform a "hit" command against the given operation.
-   * Upon success, the promise is resolve with an object containing
+   * Upon success, the promise is resolved with an object containing
    * fields `isAllowed` (boolean), `currentCredit`, and
    * `nextResetSeconds`.
    *
-   * @param  {object} operation the operation object, consisting of string key-value pairs
-   *                            (optional, default: `{}`)
-   * @param  {number} timeout   the timeout in millis; if undefined, uses instance
-   *                            default timeout.
+   * @param {Operation} [operation={}] the operation object, consisting of string key-value pairs
+   * @param {number} [timeout] the timeout in millis; if undefined, uses instance
+   *     default timeout.
+   * @returns {Promise<HitResponse>}
+   * @throws {BacklogError} if too many requests are pending
+   * @throws {TimeoutError} if the request times out
+   * @throws {DisconnectedError} if the connection is closed
+   * @throws {BadResponseError} if the server returns an invalid response
    */
   hit(operation, timeout) {
     operation = util.removeNullOrUndefinedKeys(operation || {});
@@ -158,7 +215,11 @@ class Client extends EventEmitter {
     return pendingRequest.promise;
   }
 
-  /** Returns total number of outstanding requests. */
+  /**
+   * Returns total number of outstanding requests.
+   * @private
+   * @returns {number}
+   */
   _numPendingRequests() {
     // When connected, the requestQueue will typically be near-empty
     // (commands are flushed quickly) and the responseQueue will match
@@ -169,6 +230,11 @@ class Client extends EventEmitter {
     return this.requestQueue.length + this.responseQueue.length;
   }
 
+  /**
+   * Creates the socket and initiates the TCP connection.
+   * @private
+   * @returns {void}
+   */
   _doConnect() {
     this.connectTimeoutHandle = null;
     this.clientSocket = new net.Socket();
@@ -180,6 +246,11 @@ class Client extends EventEmitter {
     });
   }
 
+  /**
+   * Called when the socket connection is established.
+   * @private
+   * @returns {void}
+   */
   _onConnected() {
     this.connected = true;
     this.reconnectAttempts = 0;
@@ -193,7 +264,11 @@ class Client extends EventEmitter {
     this._flushPending();
   }
 
-  /** Do cleanup needed with every disconnect. */
+  /**
+   * Cleanup needed with every disconnect.
+   * @private
+   * @returns {void}
+   */
   _doDisconnect() {
     this.connected = false;
     this.clientSocket = null;
@@ -201,6 +276,12 @@ class Client extends EventEmitter {
     this.emit('disconnected');
   }
 
+  /**
+   * Handles an unexpected socket close; triggers auto-reconnect
+   * if enabled.
+   * @private
+   * @returns {void}
+   */
   _onUnexpectedDisconnect() {
     this.lastDisconnectDate = new Date();
     this._doDisconnect();
@@ -210,7 +291,12 @@ class Client extends EventEmitter {
     }
   }
 
-  /** Immediately rejects all requests, whether or not they have been sent. */
+  /**
+   * Immediately rejects all requests, whether or not they have
+   * been sent.
+   * @private
+   * @returns {void}
+   */
   _rejectAllPending() {
     while (this.requestQueue.length) {
       let elem = this.requestQueue.shift();
@@ -230,9 +316,10 @@ class Client extends EventEmitter {
   }
 
   /**
-   * Parses a protocol response.
-   * @param  {[type]} line [description]
-   * @return {[type]}      [description]
+   * Parses a protocol response line.
+   * @private
+   * @param {string} line the raw response line
+   * @returns {HitResponse|BadResponseError}
    */
   _parseLine(line) {
     const tokens = line.split(' ');
@@ -252,6 +339,12 @@ class Client extends EventEmitter {
     };
   }
 
+  /**
+   * Handles a line received from the server socket.
+   * @private
+   * @param {string} line the raw response line
+   * @returns {void}
+   */
   _receivedLine(line) {
     const currentRequest = this.responseQueue.shift();
 
@@ -272,6 +365,13 @@ class Client extends EventEmitter {
     }
   }
 
+  /**
+   * Enqueues a message to be sent, connecting if necessary.
+   * @private
+   * @param {string} message the raw protocol message
+   * @param {number|null} timeout timeout in milliseconds
+   * @returns {PendingRequest}
+   */
   _enqueueMessage(message, timeout) {
     const pendingRequest = this._newPendingRequest(message, timeout);
     this.requestQueue.push(pendingRequest);
@@ -283,6 +383,11 @@ class Client extends EventEmitter {
     return pendingRequest;
   }
 
+  /**
+   * Writes all queued requests to the socket.
+   * @private
+   * @returns {void}
+   */
   _flushPending() {
     while (this.requestQueue.length) {
       let pendingRequest = this.requestQueue.shift();
@@ -295,6 +400,13 @@ class Client extends EventEmitter {
     }
   }
 
+  /**
+   * Creates a new pending request with a promise and timeout.
+   * @private
+   * @param {string} message the raw protocol message
+   * @param {number|null} timeout timeout in milliseconds
+   * @returns {PendingRequest}
+   */
   _newPendingRequest(message, timeout) {
     const pendingRequest = {
       message: message,
@@ -337,15 +449,30 @@ class Client extends EventEmitter {
 }
 
 /**
- * Stub of the public interface.
+ * Stub of the public interface. Always allows operations without
+ * making any network calls.
+ *
+ * @extends Client
  */
 Client.Stub = class DivvyClientStub extends Client {
+  /**
+   * No-op.
+   * @returns {void}
+   */
   connect() {
   }
 
+  /**
+   * No-op.
+   * @returns {void}
+   */
   close() {
   }
 
+  /**
+   * Always resolves with an allowed response.
+   * @returns {Promise<HitResponse>}
+   */
   hit() {
     return Promise.resolve({
       isAllowed: true,

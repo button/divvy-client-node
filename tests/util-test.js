@@ -1,20 +1,21 @@
+// @ts-check
 'use strict';
 
 const assert = require('assert');
 const util = require('../src/util');
 
-const VALID_OPERATIONS = [
+const VALID_OPERATIONS = Object.freeze([
   {},
   { shoes: 'feet'},
   { shoes: 'feet', bangles: 'arm' }
-];
+]);
 
-const INVALID_OPERATIONS = [
+const INVALID_OPERATIONS = Object.freeze([
   { hello: new Error() },
   { shoes: { dont: 'lie '} },
   { titanic: 'greatest\nmovie\nevar' },
   { 'i want to be': 'under_the_sea' }
-];
+]);
 
 describe('src/util', () => {
 

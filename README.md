@@ -19,7 +19,7 @@ const client = new DivvyClient('localhost', 8321);
 
 client.hit({ method: 'GET', path: '/pantry/cookies' }).then((result) => {
     console.log(`Success: ${JSON.stringify(result)}`);
-    // { allowed: true, currentCredit: 100, nextResetSeconds: 60 }
+    // { isAllowed: true, currentCredit: 100, nextResetSeconds: 60 }
 }).catch((err) => {
     console.log(`Error: ${err.message}`);    
 });
